@@ -1,30 +1,33 @@
-import React, { useState, useEffect } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, Alert, Vibration, Platform } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { StyleSheet, Text, View, TouchableOpacity, Vibration } from 'react-native';
 import { Audio } from 'expo-av';
-import * as BarCodeScanner from 'expo-barcode-scanner';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 
 const SOUND_SUCCESS = require('./success.mp3');
 const SOUND_FAIL = require('./fail.mp3');
 
 export default function App() {
-  const [hasPermission, setHasPermission] = useState(null);
+  const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
   const [scanResult, setScanResult] = useState(null);
   const [scanTime, setScanTime] = useState(null);
   const [scanType, setScanType] = useState(null);
   const [isSuccess, setIsSuccess] = useState(true);
+  const [torch, setTorch] = useState(false);
+  const soundRef = useRef(null);
 
   useEffect(() => {
-    (async () => {
-      const { status } = await BarCodeScanner.requestCameraPermissionsAsync();
-      setHasPermission(status === 'granted');
-    })();
+    return () => {
+      if (soundRef.current) soundRef.current.unloadAsync();
+    };
   }, []);
 
   const playSound = async (isSuccessSound) => {
     try {
+      if (soundRef.current) await soundRef.current.unloadAsync();
       const soundFile = isSuccessSound ? SOUND_SUCCESS : SOUND_FAIL;
       const { sound } = await Audio.Sound.createAsync(soundFile);
+      soundRef.current = sound;
       await sound.playAsync();
       sound.setOnPlaybackStatusUpdate((status) => {
         if (status.isLoaded && status.didJustFinish) sound.unloadAsync();
@@ -60,7 +63,7 @@ export default function App() {
     setScanType(null);
   };
 
-  if (hasPermission === null) {
+  if (!permission) {
     return (
       <View style={styles.container}>
         <Text style={styles.message}>正在请求相机权限...</Text>
@@ -68,11 +71,14 @@ export default function App() {
     );
   }
 
-  if (hasPermission === false) {
+  if (!permission.granted) {
     return (
       <View style={styles.container}>
         <Text style={styles.message}>⚠️ 没有相机权限</Text>
         <Text style={styles.subMessage}>请在设置中开启相机权限</Text>
+        <TouchableOpacity style={styles.button} onPress={requestPermission}>
+          <Text style={styles.buttonText}>授权相机</Text>
+        </TouchableOpacity>
       </View>
     );
   }
@@ -81,26 +87,36 @@ export default function App() {
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>📱 PM码扫码器</Text>
+        <TouchableOpacity style={styles.torchBtn} onPress={() => setTorch(!torch)}>
+          <Text style={styles.torchText}>{torch ? '🔦 闪光灯关' : '💡 闪光灯开'}</Text>
+        </TouchableOpacity>
       </View>
 
       {!scanned ? (
         <View style={styles.cameraContainer}>
-          <BarCodeScanner
-            onBarCodeScanned={scanned ? undefined : handleBarCodeScanned}
+          <CameraView
             style={styles.camera}
-            barCodeTypes={[
-              BarCodeScanner.Constants.BarCodeType.qr,
-              BarCodeScanner.Constants.BarCodeType.pdf417,
-              BarCodeScanner.Constants.BarCodeType.ean13,
-              BarCodeScanner.Constants.BarCodeType.ean8,
-              BarCodeScanner.Constants.BarCodeType.code128,
-              BarCodeScanner.Constants.BarCodeType.code39,
-              BarCodeScanner.Constants.BarCodeType.code93,
-              BarCodeScanner.Constants.BarCodeType.upc_e,
-              BarCodeScanner.Constants.BarCodeType.upc_a,
-              BarCodeScanner.Constants.BarCodeType.cob,
-              BarCodeScanner.Constants.BarCodeType.itf14,
-            ]}
+            facing="back"
+            enableTorch={torch}
+            onBarcodeScanned={handleBarCodeScanned}
+            barcodeScannerSettings={{
+              barcodeTypes: [
+                'qr',
+                'pdf417',
+                'ean13',
+                'ean8',
+                'code128',
+                'code39',
+                'code93',
+                'upc_e',
+                'upc_a',
+                'codabar',
+                'itf14',
+                'data_matrix',
+                'aztec',
+                'interleaved2of5',
+              ],
+            }}
           />
           <View style={styles.overlay}>
             <View style={styles.scanFrame}>
@@ -122,7 +138,7 @@ export default function App() {
           <View style={styles.resultBody}>
             <View style={styles.resultRow}>
               <Text style={styles.resultLabel}>码类型：</Text>
-              <Text style={styles.resultValue}>{scanType || '未知'}</Text>
+              <Text style={styles.resultValue}>{scanType ? scanType.replace(/_/g, ' ') : '未知'}</Text>
             </View>
             <View style={styles.resultRow}>
               <Text style={styles.resultLabel}>扫码时间：</Text>
@@ -141,8 +157,6 @@ export default function App() {
           </TouchableOpacity>
         </View>
       )}
-
-      <StatusBar style="auto" />
     </View>
   );
 }
@@ -154,13 +168,26 @@ const styles = StyleSheet.create({
     paddingTop: 50,
   },
   header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
+    paddingHorizontal: 20,
     paddingBottom: 20,
   },
   title: {
     fontSize: 22,
     fontWeight: 'bold',
     color: '#fff',
+  },
+  torchBtn: {
+    backgroundColor: '#16213e',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  torchText: {
+    color: '#00d4ff',
+    fontSize: 13,
   },
   cameraContainer: {
     flex: 1,
