@@ -1,10 +1,28 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, Vibration } from 'react-native';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { StyleSheet, Text, View, TouchableOpacity, Vibration, Platform, Linking } from 'react-native';
 import { Audio } from 'expo-av';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import { CameraView, useCameraPermissions, CameraType } from 'expo-camera';
 
 const SOUND_SUCCESS = require('./success.mp3');
 const SOUND_FAIL = require('./fail.mp3');
+
+// 支持的码类型（包含 Data Matrix / DM码）
+const BARCODE_TYPES = [
+  'qr',
+  'data_matrix',
+  'pdf417',
+  'aztec',
+  'codabar',
+  'code128',
+  'code39',
+  'code93',
+  'ean13',
+  'ean8',
+  'upc_e',
+  'upc_a',
+  'itf14',
+  'interleaved2of5',
+];
 
 export default function App() {
   const [permission, requestPermission] = useCameraPermissions();
@@ -14,7 +32,11 @@ export default function App() {
   const [scanType, setScanType] = useState(null);
   const [isSuccess, setIsSuccess] = useState(true);
   const [torch, setTorch] = useState(false);
+  const [cameraReady, setCameraReady] = useState(false);
+  const [facing, setFacing] = useState('back');
   const soundRef = useRef(null);
+  const cameraRef = useRef(null);
+  const lastScanTime = useRef(0);
 
   useEffect(() => {
     return () => {
@@ -26,9 +48,8 @@ export default function App() {
     try {
       if (soundRef.current) await soundRef.current.unloadAsync();
       const soundFile = isSuccessSound ? SOUND_SUCCESS : SOUND_FAIL;
-      const { sound } = await Audio.Sound.createAsync(soundFile);
+      const { sound } = await Audio.Sound.createAsync(soundFile, { shouldPlay: true });
       soundRef.current = sound;
-      await sound.playAsync();
       sound.setOnPlaybackStatusUpdate((status) => {
         if (status.isLoaded && status.didJustFinish) sound.unloadAsync();
       });
@@ -45,8 +66,12 @@ export default function App() {
     }
   };
 
-  const handleBarCodeScanned = ({ type, data }) => {
-    if (scanned) return;
+  // 防抖：500ms 内不重复处理同一帧
+  const handleBarCodeScanned = useCallback(({ type, data }) => {
+    const now = Date.now();
+    if (now - lastScanTime.current < 800) return;
+    lastScanTime.current = now;
+
     setScanned(true);
     setScanResult(data);
     setScanType(type);
@@ -54,13 +79,25 @@ export default function App() {
     setIsSuccess(true);
     playSound(true);
     vibrate(true);
-  };
+  }, []);
 
-  const handleScanAgain = () => {
+  const handleScanAgain = useCallback(async () => {
     setScanned(false);
     setScanResult(null);
     setScanTime(null);
     setScanType(null);
+    // 等待 CameraView 完全重新初始化
+    await new Promise(resolve => setTimeout(resolve, 300));
+    setCameraReady(false);
+    setTimeout(() => setCameraReady(true), 100);
+  }, []);
+
+  const toggleCamera = () => {
+    setFacing(f => (f === 'back' ? 'front' : 'back'));
+  };
+
+  const openSettings = () => {
+    Linking.openSettings();
   };
 
   if (!permission) {
@@ -74,10 +111,10 @@ export default function App() {
   if (!permission.granted) {
     return (
       <View style={styles.container}>
-        <Text style={styles.message}>⚠️ 没有相机权限</Text>
-        <Text style={styles.subMessage}>请在设置中开启相机权限</Text>
-        <TouchableOpacity style={styles.button} onPress={requestPermission}>
-          <Text style={styles.buttonText}>授权相机</Text>
+        <Text style={styles.message}>⚠️ 需要相机权限</Text>
+        <Text style={styles.subMessage}>请在设置中开启相机权限以扫描二维码</Text>
+        <TouchableOpacity style={styles.button} onPress={permission.canAskAgain ? requestPermission : openSettings}>
+          <Text style={styles.buttonText}>{permission.canAskAgain ? '授权相机' : '打开设置'}</Text>
         </TouchableOpacity>
       </View>
     );
@@ -87,37 +124,34 @@ export default function App() {
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>📱 PM码扫码器</Text>
-        <TouchableOpacity style={styles.torchBtn} onPress={() => setTorch(!torch)}>
-          <Text style={styles.torchText}>{torch ? '🔦 闪光灯关' : '💡 闪光灯开'}</Text>
-        </TouchableOpacity>
+        <View style={styles.headerBtns}>
+          <TouchableOpacity style={styles.torchBtn} onPress={() => setTorch(!torch)}>
+            <Text style={styles.torchText}>{torch ? '🔦 关' : '💡 开'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.torchBtn} onPress={toggleCamera}>
+            <Text style={styles.torchText}>🔄 翻转</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {!scanned ? (
         <View style={styles.cameraContainer}>
           <CameraView
+            key={facing}
             style={styles.camera}
-            facing="back"
+            facing={facing}
             enableTorch={torch}
-            onBarcodeScanned={handleBarCodeScanned}
+            onCameraReady={() => setCameraReady(true)}
+            onBarcodeScanned={cameraReady ? handleBarCodeScanned : undefined}
             barcodeScannerSettings={{
-              barcodeTypes: [
-                'qr',
-                'pdf417',
-                'ean13',
-                'ean8',
-                'code128',
-                'code39',
-                'code93',
-                'upc_e',
-                'upc_a',
-                'codabar',
-                'itf14',
-                'data_matrix',
-                'aztec',
-                'interleaved2of5',
-              ],
+              barcodeTypes: BARCODE_TYPES,
             }}
           />
+          {!cameraReady && (
+            <View style={styles.cameraLoading}>
+              <Text style={styles.cameraLoadingText}>相机初始化中...</Text>
+            </View>
+          )}
           <View style={styles.overlay}>
             <View style={styles.scanFrame}>
               <View style={[styles.corner, styles.topLeft]} />
@@ -125,7 +159,8 @@ export default function App() {
               <View style={[styles.corner, styles.bottomLeft]} />
               <View style={[styles.corner, styles.bottomRight]} />
             </View>
-            <Text style={styles.hint}>将二维码/条码放入框内自动扫描</Text>
+            <Text style={styles.hint}>将二维码/DM码放入框内</Text>
+            <Text style={styles.hintSub}>支持：二维码、Data Matrix、PDF417、条形码</Text>
           </View>
         </View>
       ) : (
@@ -138,7 +173,7 @@ export default function App() {
           <View style={styles.resultBody}>
             <View style={styles.resultRow}>
               <Text style={styles.resultLabel}>码类型：</Text>
-              <Text style={styles.resultValue}>{scanType ? scanType.replace(/_/g, ' ') : '未知'}</Text>
+              <Text style={styles.resultValue}>{scanType ? formatCodeType(scanType) : '未知'}</Text>
             </View>
             <View style={styles.resultRow}>
               <Text style={styles.resultLabel}>扫码时间：</Text>
@@ -161,43 +196,83 @@ export default function App() {
   );
 }
 
+// 码类型友好名称
+function formatCodeType(type) {
+  const map = {
+    qr: '二维码 (QR)',
+    data_matrix: 'Data Matrix (DM码)',
+    pdf417: 'PDF417',
+    aztec: 'Aztec',
+    codabar: 'Codabar',
+    code128: 'Code 128',
+    code39: 'Code 39',
+    code93: 'Code 93',
+    ean13: 'EAN-13',
+    ean8: 'EAN-8',
+    upc_e: 'UPC-E',
+    upc_a: 'UPC-A',
+    itf14: 'ITF-14',
+    interleaved2of5: '交叉25码',
+  };
+  return map[type] || type;
+}
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#1a1a2e',
-    paddingTop: 50,
+    paddingTop: Platform.OS === 'ios' ? 60 : 40,
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 20,
-    paddingBottom: 20,
+    paddingBottom: 16,
   },
   title: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: 'bold',
     color: '#fff',
   },
+  headerBtns: {
+    flexDirection: 'row',
+    gap: 8,
+  },
   torchBtn: {
     backgroundColor: '#16213e',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
     borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#00d4ff33',
   },
   torchText: {
     color: '#00d4ff',
     fontSize: 13,
+    fontWeight: '600',
   },
   cameraContainer: {
     flex: 1,
-    margin: 20,
+    margin: 16,
     borderRadius: 16,
     overflow: 'hidden',
     position: 'relative',
+    backgroundColor: '#000',
   },
   camera: {
     flex: 1,
+  },
+  cameraLoading: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#000',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  cameraLoadingText: {
+    color: '#00d4ff',
+    fontSize: 16,
   },
   overlay: {
     position: 'absolute',
@@ -209,14 +284,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   scanFrame: {
-    width: 240,
-    height: 240,
+    width: 260,
+    height: 260,
     position: 'relative',
   },
   corner: {
     position: 'absolute',
-    width: 30,
-    height: 30,
+    width: 36,
+    height: 36,
     borderColor: '#00d4ff',
   },
   topLeft: {
@@ -245,13 +320,23 @@ const styles = StyleSheet.create({
   },
   hint: {
     color: '#fff',
-    marginTop: 20,
-    fontSize: 14,
+    marginTop: 24,
+    fontSize: 15,
+    fontWeight: '600',
+    textAlign: 'center',
+    textShadowColor: '#000',
+    textShadowOffset: { width: 1, height: 1 },
+    textShadowRadius: 3,
+  },
+  hintSub: {
+    color: '#aaa',
+    marginTop: 6,
+    fontSize: 12,
     textAlign: 'center',
   },
   resultContainer: {
     flex: 1,
-    margin: 20,
+    margin: 16,
     borderRadius: 16,
     padding: 20,
     backgroundColor: '#16213e',
@@ -270,8 +355,8 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   resultIcon: {
-    fontSize: 28,
-    marginRight: 10,
+    fontSize: 30,
+    marginRight: 12,
   },
   resultTitle: {
     fontSize: 22,
@@ -284,14 +369,16 @@ const styles = StyleSheet.create({
   resultRow: {
     flexDirection: 'row',
     marginBottom: 12,
+    alignItems: 'flex-start',
   },
   resultLabel: {
-    fontSize: 15,
-    color: '#aaa',
-    width: 80,
+    fontSize: 14,
+    color: '#888',
+    width: 72,
+    paddingTop: 2,
   },
   resultValue: {
-    fontSize: 15,
+    fontSize: 14,
     color: '#fff',
     flex: 1,
   },
@@ -299,20 +386,21 @@ const styles = StyleSheet.create({
     backgroundColor: '#0f3460',
     borderRadius: 10,
     padding: 16,
-    marginTop: 8,
-    maxHeight: 300,
+    marginTop: 4,
+    maxHeight: 320,
   },
   contentText: {
     color: '#e0e0e0',
-    fontSize: 15,
-    lineHeight: 24,
+    fontSize: 14,
+    lineHeight: 22,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
   button: {
     backgroundColor: '#00d4ff',
     borderRadius: 12,
     padding: 16,
     alignItems: 'center',
-    marginTop: 20,
+    marginTop: 16,
   },
   buttonText: {
     fontSize: 18,
@@ -330,5 +418,6 @@ const styles = StyleSheet.create({
     color: '#aaa',
     textAlign: 'center',
     marginTop: 10,
+    marginHorizontal: 40,
   },
 });
