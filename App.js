@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, Vibration, Platform, Linking } from 'react-native';
 import { Audio } from 'expo-av';
-import { CameraView, useCameraPermissions, CameraType } from 'expo-camera';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 
 const SOUND_SUCCESS = require('./success.mp3');
 const SOUND_FAIL = require('./fail.mp3');
 
-// 支持的码类型（包含 Data Matrix / DM码）
 const BARCODE_TYPES = [
   'qr',
   'data_matrix',
@@ -32,10 +31,9 @@ export default function App() {
   const [scanType, setScanType] = useState(null);
   const [isSuccess, setIsSuccess] = useState(true);
   const [torch, setTorch] = useState(false);
-  const [cameraReady, setCameraReady] = useState(false);
   const [facing, setFacing] = useState('back');
+  const [cameraKey, setCameraKey] = useState(0); // 用于强制重建相机
   const soundRef = useRef(null);
-  const cameraRef = useRef(null);
   const lastScanTime = useRef(0);
 
   useEffect(() => {
@@ -66,8 +64,8 @@ export default function App() {
     }
   };
 
-  // 防抖：500ms 内不重复处理同一帧
   const handleBarCodeScanned = useCallback(({ type, data }) => {
+    if (scanned) return;
     const now = Date.now();
     if (now - lastScanTime.current < 800) return;
     lastScanTime.current = now;
@@ -79,26 +77,22 @@ export default function App() {
     setIsSuccess(true);
     playSound(true);
     vibrate(true);
-  }, []);
+  }, [scanned]);
 
-  const handleScanAgain = useCallback(async () => {
+  const handleScanAgain = useCallback(() => {
     setScanned(false);
     setScanResult(null);
     setScanTime(null);
     setScanType(null);
-    // 等待 CameraView 完全重新初始化
-    await new Promise(resolve => setTimeout(resolve, 300));
-    setCameraReady(false);
-    setTimeout(() => setCameraReady(true), 100);
+    // 强制重建 CameraView，彻底解决预览黑屏
+    setCameraKey(k => k + 1);
   }, []);
 
   const toggleCamera = () => {
     setFacing(f => (f === 'back' ? 'front' : 'back'));
   };
 
-  const openSettings = () => {
-    Linking.openSettings();
-  };
+  const openSettings = () => Linking.openSettings();
 
   if (!permission) {
     return (
@@ -134,36 +128,28 @@ export default function App() {
         </View>
       </View>
 
-      {!scanned ? (
-        <View style={styles.cameraContainer}>
-          <CameraView
-            key={facing}
-            style={styles.camera}
-            facing={facing}
-            enableTorch={torch}
-            onCameraReady={() => setCameraReady(true)}
-            onBarcodeScanned={cameraReady ? handleBarCodeScanned : undefined}
-            barcodeScannerSettings={{
-              barcodeTypes: BARCODE_TYPES,
-            }}
-          />
-          {!cameraReady && (
-            <View style={styles.cameraLoading}>
-              <Text style={styles.cameraLoadingText}>相机初始化中...</Text>
-            </View>
-          )}
-          <View style={styles.overlay}>
-            <View style={styles.scanFrame}>
-              <View style={[styles.corner, styles.topLeft]} />
-              <View style={[styles.corner, styles.topRight]} />
-              <View style={[styles.corner, styles.bottomLeft]} />
-              <View style={[styles.corner, styles.bottomRight]} />
-            </View>
-            <Text style={styles.hint}>将二维码/DM码放入框内</Text>
-            <Text style={styles.hintSub}>支持：二维码、Data Matrix、PDF417、条形码</Text>
+      <View style={styles.cameraContainer}>
+        <CameraView
+          key={cameraKey}
+          style={styles.camera}
+          facing={facing}
+          enableTorch={torch}
+          onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
+          barcodeScannerSettings={{ barcodeTypes: BARCODE_TYPES }}
+        />
+        <View style={styles.overlay}>
+          <View style={styles.scanFrame}>
+            <View style={[styles.corner, styles.topLeft]} />
+            <View style={[styles.corner, styles.topRight]} />
+            <View style={[styles.corner, styles.bottomLeft]} />
+            <View style={[styles.corner, styles.bottomRight]} />
           </View>
+          <Text style={styles.hint}>将二维码/DM码放入框内</Text>
+          <Text style={styles.hintSub}>支持：二维码、Data Matrix、PDF417、条形码</Text>
         </View>
-      ) : (
+      </View>
+
+      {scanned && (
         <View style={[styles.resultContainer, isSuccess ? styles.successBorder : styles.failBorder]}>
           <View style={styles.resultHeader}>
             <Text style={styles.resultIcon}>{isSuccess ? '✅' : '❌'}</Text>
@@ -196,7 +182,6 @@ export default function App() {
   );
 }
 
-// 码类型友好名称
 function formatCodeType(type) {
   const map = {
     qr: '二维码 (QR)',
@@ -254,7 +239,8 @@ const styles = StyleSheet.create({
   },
   cameraContainer: {
     flex: 1,
-    margin: 16,
+    marginHorizontal: 16,
+    marginBottom: 16,
     borderRadius: 16,
     overflow: 'hidden',
     position: 'relative',
@@ -262,17 +248,6 @@ const styles = StyleSheet.create({
   },
   camera: {
     flex: 1,
-  },
-  cameraLoading: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#000',
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 10,
-  },
-  cameraLoadingText: {
-    color: '#00d4ff',
-    fontSize: 16,
   },
   overlay: {
     position: 'absolute',
@@ -294,30 +269,10 @@ const styles = StyleSheet.create({
     height: 36,
     borderColor: '#00d4ff',
   },
-  topLeft: {
-    top: 0,
-    left: 0,
-    borderTopWidth: 4,
-    borderLeftWidth: 4,
-  },
-  topRight: {
-    top: 0,
-    right: 0,
-    borderTopWidth: 4,
-    borderRightWidth: 4,
-  },
-  bottomLeft: {
-    bottom: 0,
-    left: 0,
-    borderBottomWidth: 4,
-    borderLeftWidth: 4,
-  },
-  bottomRight: {
-    bottom: 0,
-    right: 0,
-    borderBottomWidth: 4,
-    borderRightWidth: 4,
-  },
+  topLeft: { top: 0, left: 0, borderTopWidth: 4, borderLeftWidth: 4 },
+  topRight: { top: 0, right: 0, borderTopWidth: 4, borderRightWidth: 4 },
+  bottomLeft: { bottom: 0, left: 0, borderBottomWidth: 4, borderLeftWidth: 4 },
+  bottomRight: { bottom: 0, right: 0, borderBottomWidth: 4, borderRightWidth: 4 },
   hint: {
     color: '#fff',
     marginTop: 24,
@@ -335,89 +290,46 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   resultContainer: {
-    flex: 1,
-    margin: 16,
-    borderRadius: 16,
-    padding: 20,
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 24,
+    paddingBottom: Platform.OS === 'ios' ? 40 : 24,
     backgroundColor: '#16213e',
   },
-  successBorder: {
-    borderWidth: 2,
-    borderColor: '#00ff88',
-  },
-  failBorder: {
-    borderWidth: 2,
-    borderColor: '#ff4757',
-  },
-  resultHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  resultIcon: {
-    fontSize: 30,
-    marginRight: 12,
-  },
-  resultTitle: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#fff',
-  },
-  resultBody: {
-    flex: 1,
-  },
-  resultRow: {
-    flexDirection: 'row',
-    marginBottom: 12,
-    alignItems: 'flex-start',
-  },
-  resultLabel: {
-    fontSize: 14,
-    color: '#888',
-    width: 72,
-    paddingTop: 2,
-  },
-  resultValue: {
-    fontSize: 14,
-    color: '#fff',
-    flex: 1,
-  },
+  successBorder: { borderTopWidth: 3, borderColor: '#00ff88' },
+  failBorder: { borderTopWidth: 3, borderColor: '#ff4757' },
+  resultHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
+  resultIcon: { fontSize: 28, marginRight: 10 },
+  resultTitle: { fontSize: 20, fontWeight: 'bold', color: '#fff' },
+  resultBody: {},
+  resultRow: { flexDirection: 'row', marginBottom: 8, alignItems: 'flex-start' },
+  resultLabel: { fontSize: 13, color: '#888', width: 68, paddingTop: 2 },
+  resultValue: { fontSize: 13, color: '#fff', flex: 1 },
   contentBox: {
     backgroundColor: '#0f3460',
     borderRadius: 10,
-    padding: 16,
+    padding: 14,
     marginTop: 4,
-    maxHeight: 320,
+    maxHeight: 200,
   },
   contentText: {
     color: '#e0e0e0',
-    fontSize: 14,
-    lineHeight: 22,
+    fontSize: 13,
+    lineHeight: 20,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
   button: {
     backgroundColor: '#00d4ff',
     borderRadius: 12,
-    padding: 16,
+    padding: 15,
     alignItems: 'center',
     marginTop: 16,
   },
-  buttonText: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#1a1a2e',
-  },
-  message: {
-    fontSize: 18,
-    color: '#fff',
-    textAlign: 'center',
-    marginTop: 100,
-  },
-  subMessage: {
-    fontSize: 14,
-    color: '#aaa',
-    textAlign: 'center',
-    marginTop: 10,
-    marginHorizontal: 40,
-  },
+  buttonText: { fontSize: 17, fontWeight: 'bold', color: '#1a1a2e' },
+  message: { fontSize: 18, color: '#fff', textAlign: 'center', marginTop: 100 },
+  subMessage: { fontSize: 14, color: '#aaa', textAlign: 'center', marginTop: 10, marginHorizontal: 40 },
 });
