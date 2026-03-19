@@ -31,8 +31,16 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Create local.properties
+        run: |
+          echo "sdk.dir=/opt/android-sdk" > android/local.properties
+          echo "api.dir=/opt/android-sdk" >> android/local.properties
+
       - name: Prebuild Android project
         run: npx expo prebuild --platform android --clean
+        env:
+          ANDROID_HOME: /opt/android-sdk
+          ANDROID_SDK_ROOT: /opt/android-sdk
 
       - name: Build Release APK
         run: |
